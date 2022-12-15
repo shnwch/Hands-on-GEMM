@@ -1,3 +1,4 @@
+
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -7,8 +8,8 @@ constexpr size_t BLOCK_SIZE = 16; // we assume that every block has equal blockD
 constexpr size_t BLOCK_M = 128;   // These const values decide how many thing a thread compute and the amount of shared memory to allocate.
 constexpr size_t BLOCK_N = 128;
 constexpr size_t BLOCK_K = 8; // don't set 64 here, it will cause bank conflict and lower occupancy.
-constexpr size_t BLOCK_M_COMPUTE = BLOCK_M / BLOCK_SIZE;
-constexpr size_t BLOCK_N_COMPUTE = BLOCK_N / BLOCK_SIZE;
+constexpr size_t BLOCK_M_COMPUTE = BLOCK_M / BLOCK_SIZE; // Mthread 8 = 128 / 16
+constexpr size_t BLOCK_N_COMPUTE = BLOCK_N / BLOCK_SIZE;  // Nthread
 
 constexpr int shared_memory_A = BLOCK_M * BLOCK_K;
 constexpr int shared_memory_B = BLOCK_N * BLOCK_K;
@@ -20,11 +21,11 @@ constexpr int shared_memory_size = shared_memory_element * sizeof(float); // sha
 __global__ void matrixMul(const float *A, const float *B, float *C,
                           int M, int N, int K, float alpha, float beta)
 {
-    const size_t baseX = blockIdx.x * blockDim.x * BLOCK_M_COMPUTE;
+    const size_t baseX = blockIdx.x * blockDim.x * BLOCK_M_COMPUTE; 
     const size_t baseY = blockIdx.y * blockDim.y * BLOCK_N_COMPUTE;
 
-    const int moveNum = shared_memory_element / (BLOCK_SIZE * BLOCK_SIZE) / 2;
-    const size_t baseIdx = threadIdx.y * blockDim.y + threadIdx.x;   //应该是乘blockDim.x？？？？
+    const int moveNum = shared_memory_element / (BLOCK_SIZE * BLOCK_SIZE) / 2; 
+    const size_t baseIdx = threadIdx.y * blockDim.y + threadIdx.x; //应该是乘blockDim.x？？？？
 
     constexpr size_t threadsNum = BLOCK_SIZE * BLOCK_SIZE;
 
@@ -34,7 +35,7 @@ __global__ void matrixMul(const float *A, const float *B, float *C,
     __shared__ float subA[BLOCK_M * BLOCK_K];
     __shared__ float subB[BLOCK_N * BLOCK_K];
 
-    float4 regB[BLOCK_M_COMPUTE / 4]; // hopefully, these should reside in register.
+    float4 regB[BLOCK_M_COMPUTE / 4]; // [8/4] float4  hopefully, these should reside in register.
     float4 regA[BLOCK_M_COMPUTE / 4];
 
     const float *baseA = A + baseY * K;
@@ -42,12 +43,13 @@ __global__ void matrixMul(const float *A, const float *B, float *C,
     float *baseC = C + (baseY + threadIdx.x * BLOCK_M_COMPUTE) * N + baseX + threadIdx.y * BLOCK_N_COMPUTE;
 
     int rowA = baseIdx / 2, rowB = baseIdx / (BLOCK_N / 4), colA = (baseIdx & 1) * 4, colB = (baseIdx * 4) % BLOCK_N;
+    // rowA = baseIdx / 2 是因为每两行thread 读取一行K大小的A   注意 这里是用来读取的 不是用来定位C的
 
     for (int i = 0; i < K; i += BLOCK_K)
     {
-        regB[0] = *reinterpret_cast<const float4 *>(baseB + i * N + rowB * N + colB);
+        regB[0] = *reinterpret_cast<const float4 *>(baseB + i * N + rowB * N + colB); //用寄存器从global读取 当个中转站
         regA[0] = *reinterpret_cast<const float4 *>(baseA + i + rowA * K + colA);
-        *reinterpret_cast<float4 *>(&subB[baseIdx * 4]) = regB[0];
+        *reinterpret_cast<float4 *>(&subB[baseIdx * 4]) = regB[0];  //一个线程只负责读取A B各4个数  猪脑子 妈的
         subA[rowA + colA * BLOCK_M] = regA[0].x;
         subA[rowA + (colA + 1) * BLOCK_M] = regA[0].y;
         subA[rowA + (colA + 2) * BLOCK_M] = regA[0].z;
